@@ -10,11 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
+	"github.com/biogo/store/interval"
 	"github.com/giuseppe/crfs/stargz"
 	"github.com/pkg/errors"
 )
@@ -22,6 +22,17 @@ import (
 const chunkSize = int64(1048576 / 2)
 
 const downloadAllFile = false
+
+type intOverlap struct {
+	start, end int
+}
+
+func (o *intOverlap) Overlap(r interval.IntRange) bool {
+	return r.Start >= o.start && r.End <= o.end
+}
+func (o *intOverlap) ID() uintptr              { return uintptr(o.start) }
+func (o *intOverlap) Range() interval.IntRange { return interval.IntRange{o.start, o.end} }
+func (o *intOverlap) String() string           { return fmt.Sprintf("[%d,%d)", o.start, o.end) }
 
 type layer struct {
 	reader  *stargz.Reader
@@ -36,12 +47,10 @@ type urlReaderAt struct {
 	cache         []byte
 	cacheRange    string
 	client        *http.Client
-	cond          *sync.Cond
 	destFile      string
 	done          bool
-	chunks        []bool
-	requests      chan int64
 	destFileFD    *os.File
+	fetched       *interval.IntTree
 }
 
 type dent struct {
@@ -87,28 +96,23 @@ func errorValue(err error) int {
 	return -int(syscall.EINVAL)
 }
 
-func (r *urlReaderAt) hasChunks(off, len int64) bool {
-	if r.done {
-		return true
-	}
-	for n := off / chunkSize; n <= (off+len)/chunkSize; n++ {
-		if !r.chunks[n] {
-			return false
-		}
-	}
-	return true
-}
-func (r *urlReaderAt) fetchChunk(nChunk int64) error {
-	off := nChunk * chunkSize
-	len := (nChunk + 1) * chunkSize
-
-	if off+len > r.contentLength {
-		len = r.contentLength - off
+func (r *urlReaderAt) fetchChunk(off, size int64) error {
+	if off+size > r.contentLength {
+		size = r.contentLength - off
 	}
 
-	rangeVal := fmt.Sprintf("bytes=%d-%d", off, off+len-1)
+	bytesOverlap := &intOverlap{
+		start: int(off),
+		end:   int(off + size),
+	}
+	got := r.fetched.Get(bytesOverlap)
+	if len(got) > 0 {
+		return nil
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	rangeVal := fmt.Sprintf("bytes=%d-%d", off, off+size-1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	req, err := http.NewRequest("GET", r.url, nil)
 	if err != nil {
@@ -119,7 +123,7 @@ func (r *urlReaderAt) fetchChunk(nChunk int64) error {
 
 	if r.client == nil {
 		r.client = &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 300 * time.Second,
 		}
 	}
 
@@ -131,10 +135,10 @@ func (r *urlReaderAt) fetchChunk(nChunk int64) error {
 
 	if location := res.Header.Get("Location"); location != "" {
 		r.url = location
-		return r.fetchChunk(nChunk)
+		return r.fetchChunk(off, size)
 	}
 
-	buf := make([]byte, len)
+	buf := make([]byte, size)
 
 	n, err := io.ReadFull(res.Body, buf)
 	if err != nil {
@@ -142,76 +146,16 @@ func (r *urlReaderAt) fetchChunk(nChunk int64) error {
 	}
 
 	_, err = r.destFileFD.WriteAt(buf[:n], off)
-	return err
+	if err != nil {
+		return err
+	}
+	return r.fetched.Insert(bytesOverlap, false)
 }
 
-func (r *urlReaderAt) download() error {
-	defer func() {
-		r.done = true
-		r.cond.L.Lock()
-		r.cond.Broadcast()
-		r.cond.L.Unlock()
-	}()
-
-	genC := make(chan int64)
-	done := make(chan interface{})
-
-	if downloadAllFile {
-		go func() {
-			// iterate backward as the TOC is at the end
-			for nChunk := r.contentLength / chunkSize; nChunk >= int64(0); nChunk-- {
-				genC <- nChunk
-			}
-			done <- true
-		}()
+func (r *urlReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if err := r.fetchChunk(off, int64(len(p))); err != nil {
+		return -1, err
 	}
-
-	for {
-		var nextChunk int64
-		select {
-		case n := <-r.requests:
-			nextChunk = n
-		case n := <-genC:
-			nextChunk = n
-		case <-done:
-			return nil
-		}
-
-		if r.chunks[nextChunk] {
-			continue
-		}
-
-		if err := r.fetchChunk(nextChunk); err != nil {
-			return err
-		}
-		r.chunks[nextChunk] = true
-		r.cond.L.Lock()
-		r.cond.Broadcast()
-		r.cond.L.Unlock()
-	}
-	return nil
-}
-
-func (r *urlReaderAt) requestChunks(off, len int64) {
-	for n := off / chunkSize; n <= (off+len)/chunkSize; n++ {
-		if !r.chunks[n] {
-			r.requests <- n
-		}
-	}
-}
-
-func (r *urlReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
-	r.cond.L.Lock()
-	requested := false
-	for !r.hasChunks(off, int64(len(p))) {
-		if !requested {
-			r.requestChunks(off, int64(len(p)))
-			requested = true
-		}
-		r.cond.Wait()
-	}
-	r.cond.L.Unlock()
-
 	return r.destFileFD.ReadAt(p, off)
 }
 
@@ -250,21 +194,15 @@ func openLayer(data, workdir string) (*io.SectionReader, error) {
 			return nil, fmt.Errorf("invalid Content-Length for %s", data)
 		}
 
-		m := sync.Mutex{}
-		cond := sync.NewCond(&m)
 		destFile := filepath.Join(workdir, filepath.Base(data))
 		destFileFD, err := os.OpenFile(destFile, os.O_RDWR|os.O_CREATE, 0700)
-		chunks := make([]bool, res.ContentLength/chunkSize+1)
 		r := &urlReaderAt{
 			url:           data,
 			contentLength: res.ContentLength,
-			cond:          cond,
 			destFile:      destFile,
 			destFileFD:    destFileFD,
-			chunks:        chunks,
-			requests:      make(chan int64, 10),
+			fetched:       &interval.IntTree{},
 		}
-		go r.download()
 
 		return io.NewSectionReader(r, 0, res.ContentLength), nil
 	}

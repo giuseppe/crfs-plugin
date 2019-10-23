@@ -266,8 +266,14 @@ func getInoFor(l *layer, ent *stargz.TOCEntry) (uint64, error) {
 }
 
 //export OpenLayer
-func OpenLayer(data, target, workdir string) int {
-	sr, err := openLayer(data, workdir)
+func OpenLayer(dataB64, target, workdir string) int {
+	data, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cannot decode %s\n", dataB64)
+		os.Exit(1)
+	}
+
+	sr, err := openLayer(string(data), workdir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot open source %s: %v\n", data, err)
 		os.Exit(1)
@@ -288,14 +294,14 @@ func OpenLayer(data, target, workdir string) int {
 	return len(layers) - 1
 }
 
-//export OpenLayerBase64
-func OpenLayerBase64(dataB64, target, workdir string) int {
+//export NumOfLayers
+func NumOfLayers(dataB64, target string) int {
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot decode %s\n", dataB64)
 		os.Exit(1)
 	}
-	return OpenLayer(string(data), target, workdir)
+	return 1;
 }
 
 //export Stat
@@ -514,6 +520,14 @@ func Listxattr(layerHandle int, path string) (ret int, value unsafe.Pointer) {
 	data = append(data, 0)
 
 	return len(data), C.CBytes(data)
+}
+
+//export Load
+func Load() {
+}
+
+//export Release
+func Release() {
 }
 
 func main() {

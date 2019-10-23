@@ -285,7 +285,7 @@ crfs_readlinkat (struct ovl_layer *l, const char *path, char *buf, size_t bufsiz
 }
 
 static int
-crfs_load_data_source (struct ovl_layer *l, const char *opaque, const char *path)
+crfs_load_data_source (struct ovl_layer *l, const char *opaque, const char *path, int layer)
 {
   int layer_handle;
 
@@ -301,9 +301,10 @@ crfs_load_data_source (struct ovl_layer *l, const char *opaque, const char *path
       return l->fd;
     }
 
-  layer_handle = OpenLayerBase64 (make_go_string (opaque),
-                                  make_go_string (l->path),
-                                  make_go_string (l->ovl_data->workdir));
+  layer_handle = OpenLayer (make_go_string (opaque),
+                            make_go_string (l->path),
+                            make_go_string (l->ovl_data->workdir),
+                            layer);
   if (layer_handle < 0)
     {
       errno = -layer_handle;
@@ -316,6 +317,12 @@ crfs_load_data_source (struct ovl_layer *l, const char *opaque, const char *path
 }
 
 static int
+crfs_num_of_layers (const char *opaque, const char *path)
+{
+  return NumOfLayers (make_go_string (opaque), make_go_string (path));
+}
+
+static int
 crfs_cleanup (struct ovl_layer *l)
 {
   return 0;
@@ -323,6 +330,7 @@ crfs_cleanup (struct ovl_layer *l)
 
 struct data_source crfs_ds =
   {
+   .num_of_layers = crfs_num_of_layers,
    .load_data_source = crfs_load_data_source,
    .cleanup = crfs_cleanup,
    .file_exists = crfs_file_exists,
@@ -351,11 +359,13 @@ plugin_name ()
 
 struct data_source *plugin_load (struct ovl_layer *layer, const char *opaque, const char *path)
 {
+  Load ();
   return &crfs_ds;
 }
 
 int
-plugin_release (struct ovl_layer *l)
+plugin_release ()
 {
+  Release ();
   return 0;
 }

@@ -7,4 +7,4 @@ require (
 	github.com/pkg/errors v0.8.2-0.20190227000051-27936f6d90f9
 )
 
-replace github.com/google/crfs => github.com/giuseppe/crfs v0.0.0-20191023102054-0f84b437e915
+replace github.com/google/crfs => /home/gscrivano/src/gopath/src/github.com/google/crfs

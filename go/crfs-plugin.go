@@ -14,7 +14,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/biogo/store/interval"
 	"github.com/google/crfs/stargz"
 	"github.com/pkg/errors"
 )
@@ -22,17 +21,6 @@ import (
 const chunkSize = int64(1048576 / 2)
 
 const downloadAllFile = false
-
-type intOverlap struct {
-	start, end int
-}
-
-func (o *intOverlap) Overlap(r interval.IntRange) bool {
-	return r.Start >= o.start && r.End <= o.end
-}
-func (o *intOverlap) ID() uintptr              { return uintptr(o.start) }
-func (o *intOverlap) Range() interval.IntRange { return interval.IntRange{o.start, o.end} }
-func (o *intOverlap) String() string           { return fmt.Sprintf("[%d,%d)", o.start, o.end) }
 
 type layer struct {
 	reader  *stargz.Reader
@@ -50,7 +38,7 @@ type urlReaderAt struct {
 	destFile      string
 	done          bool
 	destFileFD    *os.File
-	fetched       *interval.IntTree
+	fetched       map[int64]int64
 }
 
 type dent struct {
@@ -101,12 +89,7 @@ func (r *urlReaderAt) fetchChunk(off, size int64) error {
 		size = r.contentLength - off
 	}
 
-	bytesOverlap := &intOverlap{
-		start: int(off),
-		end:   int(off + size),
-	}
-	got := r.fetched.Get(bytesOverlap)
-	if len(got) > 0 {
+	if retrievedSize, found := r.fetched[off]; found && retrievedSize >= size {
 		return nil
 	}
 
@@ -149,7 +132,10 @@ func (r *urlReaderAt) fetchChunk(off, size int64) error {
 	if err != nil {
 		return err
 	}
-	return r.fetched.Insert(bytesOverlap, false)
+
+	r.fetched[off] = size
+
+	return nil
 }
 
 func (r *urlReaderAt) ReadAt(p []byte, off int64) (int, error) {
@@ -201,7 +187,7 @@ func openLayer(data, workdir string) (*io.SectionReader, error) {
 			contentLength: res.ContentLength,
 			destFile:      destFile,
 			destFileFD:    destFileFD,
-			fetched:       &interval.IntTree{},
+			fetched:       make(map[int64]int64),
 		}
 
 		return io.NewSectionReader(r, 0, res.ContentLength), nil

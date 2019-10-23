@@ -15,7 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/biogo/store/interval"
-	"github.com/giuseppe/crfs/stargz"
+	"github.com/google/crfs/stargz"
 	"github.com/pkg/errors"
 )
 

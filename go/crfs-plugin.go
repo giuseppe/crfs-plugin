@@ -14,6 +14,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/containers/image/v4/docker"
+	"github.com/containers/image/v4/image"
+	imageTypes "github.com/containers/image/v4/types"
 	"github.com/google/crfs/stargz"
 	"github.com/pkg/errors"
 )
@@ -23,10 +26,12 @@ const chunkSize = int64(1048576 / 2)
 const downloadAllFile = false
 
 type layer struct {
-	reader  *stargz.Reader
-	target  string
-	workdir string
-	ino     map[string]uint64
+	reader      *stargz.Reader
+	target      string
+	workdir     string
+	ino         map[string]uint64
+	layerNumber int
+	remote      *remoteData
 }
 
 type urlReaderAt struct {
@@ -51,6 +56,13 @@ type dir struct {
 	childs []dent
 	pos    int
 }
+
+type remoteData struct {
+	layers []imageTypes.BlobInfo
+	source imageTypes.ImageSource
+}
+
+var registries map[string]*remoteData = map[string]*remoteData{}
 
 var dirs = map[int]*dir{}
 var dirHandle int
@@ -157,7 +169,55 @@ func doLookup(l *layer, path string) (*stargz.TOCEntry, bool) {
 
 }
 
-func openLayer(data, workdir string) (*io.SectionReader, error) {
+type blobSeeker struct {
+	remote     *remoteData
+	layerN     int
+	fetched    map[int64]int64
+	destFileFD *os.File
+}
+
+func (b *blobSeeker) ReadAt(p []byte, off int64) (int, error) {
+	if retrievedSize, found := b.fetched[off]; found && retrievedSize >= int64(len(p)) {
+		return b.destFileFD.ReadAt(p, off)
+	}
+
+	rc, err := b.remote.source.GetBlobAt(context.Background(), b.remote.layers[b.layerN], off, int64(len(p)))
+	if err != nil {
+		return -1, err
+	}
+	defer rc.Close()
+
+	n, err := io.ReadFull(rc, p)
+	if err != nil {
+		return -1, err
+	}
+	b.fetched[off] = int64(n)
+
+	_, err = b.destFileFD.WriteAt(p, off)
+	if err != nil {
+		return -1, err
+	}
+
+	return n, err
+}
+
+func openLayer(data, workdir string, remote *remoteData, number int) (*io.SectionReader, error) {
+	if strings.HasPrefix(data, "docker://") {
+		destFile := filepath.Join(workdir, fmt.Sprintf("%s-%d", filepath.Base(data), number))
+		destFileFD, err := os.OpenFile(destFile, os.O_RDWR|os.O_CREATE, 0700)
+		if err != nil {
+			return nil, err
+		}
+
+		b := blobSeeker{
+			remote:     remote,
+			layerN:     number,
+			fetched:    make(map[int64]int64),
+			destFileFD: destFileFD,
+		}
+
+		return io.NewSectionReader(&b, 0, remote.layers[number].Size), nil
+	}
 	if strings.HasPrefix(data, "file://") {
 		path := data[len("file://"):]
 		f, err := os.Open(path)
@@ -180,7 +240,7 @@ func openLayer(data, workdir string) (*io.SectionReader, error) {
 			return nil, fmt.Errorf("invalid Content-Length for %s", data)
 		}
 
-		destFile := filepath.Join(workdir, filepath.Base(data))
+		destFile := filepath.Join(workdir, fmt.Sprintf("%s-%d", filepath.Base(data), number))
 		destFileFD, err := os.OpenFile(destFile, os.O_RDWR|os.O_CREATE, 0700)
 		r := &urlReaderAt{
 			url:           data,
@@ -266,14 +326,16 @@ func getInoFor(l *layer, ent *stargz.TOCEntry) (uint64, error) {
 }
 
 //export OpenLayer
-func OpenLayer(dataB64, target, workdir string) int {
+func OpenLayer(dataB64, target, workdir string, number int) int {
 	data, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot decode %s\n", dataB64)
 		os.Exit(1)
 	}
 
-	sr, err := openLayer(string(data), workdir)
+	remote := registries[target]
+
+	sr, err := openLayer(string(data), workdir, remote, number)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot open source %s: %v\n", data, err)
 		os.Exit(1)
@@ -285,10 +347,12 @@ func OpenLayer(dataB64, target, workdir string) int {
 		os.Exit(1)
 	}
 	newLayer := layer{
-		reader:  r,
-		target:  target,
-		workdir: workdir,
-		ino:     make(map[string]uint64),
+		reader:      r,
+		target:      target,
+		workdir:     workdir,
+		ino:         make(map[string]uint64),
+		layerNumber: number,
+		remote:      remote,
 	}
 	layers = append(layers, newLayer)
 	return len(layers) - 1
@@ -301,7 +365,39 @@ func NumOfLayers(dataB64, target string) int {
 		fmt.Fprintf(os.Stderr, "cannot decode %s\n", dataB64)
 		os.Exit(1)
 	}
-	return 1;
+
+	if strings.HasPrefix(string(data), "docker://") {
+		ctx := context.Background()
+		url := strings.TrimPrefix(string(data), "docker:")
+		ref, err := docker.ParseReference(url)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot parse %s: %v\n", url, err)
+			os.Exit(1)
+		}
+
+		source, err := ref.NewImageSource(ctx, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot get image source %s: %v\n", url, err)
+			os.Exit(1)
+		}
+
+		img, err := image.FromSource(ctx, nil, source)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot get image %s: %v\n", url, err)
+			os.Exit(1)
+		}
+		defer img.Close()
+
+		layers := img.LayerInfos()
+
+		registries[target] = &remoteData{
+			layers: layers,
+			source: source,
+		}
+
+		return len(layers)
+	}
+	return 1
 }
 
 //export Stat

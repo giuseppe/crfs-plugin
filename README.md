@@ -10,14 +10,14 @@ This is still experimental, use at your own risk.
 
 You need to have both the Go toolchain and the C compiler installed.
 
-``make``
+``$ make``
 
 The build generates a single `crfs-plugin.so` artifact that can be used
 from fuse-overlayfs.
 
-You fuse-overlayfs with plugins support from:
-https://github.com/containers/fuse-overlayfs/pull/119
+You need to use fuse-overlayfs with plugins support from:
 
+https://github.com/containers/fuse-overlayfs/pull/119
 
 # Usage
 
@@ -33,6 +33,14 @@ can be used by an unprivileged user.
 ```
 $ podman unshare
 # mkdir lower upper workdir merged
-# fuse-overlayfs -o fast_ino=1,plugins=/path/to/crfs-plugin.so,lowerdir=//test/$(echo -n https://url/to/stargzified-layer.tar.gz base64 -w0)/$(pwd)/lower,upperdir=upper,workdir=work merged
+# fuse-overlayfs -o fast_ino=1,plugins=/path/to/crfs-plugin.so,lowerdir=//test/$(echo -n https://url/to/stargzified-layer.tar.gz | base64 -w0)/$(pwd)/lower,upperdir=upper,workdir=work merged
 # podman run --rm -ti --rootfs $(pwd)/merged echo hello
+```
+
+It is also possible to use an image directly from a registry.  This
+method is still WIP and at the moment it is significantly slower than
+using the https:// method:
+
+```
+# fuse-overlayfs -o fast_ino=1,plugins=/path/to/crfs-plugin.so,lowerdir=//test/$(echo -n docker://docker.io/gscrivano/test:stargz | base64 -w0)/$(pwd)/lower,upperdir=upper,workdir=work merged
 ```

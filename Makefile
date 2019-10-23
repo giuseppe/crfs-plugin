@@ -14,7 +14,7 @@ fuse-overlayfs/config.h: fuse-overlayfs
 	touch $@
 
 go/go.a: go/crfs-plugin.go
-	(cd go; go build -buildmode=c-archive)
+	(cd go; GO111MODULE=on go build -buildmode=c-archive)
 
 clean:
 	rm -f crfs-plugin.so go/go.a

@@ -470,13 +470,14 @@ func WaitForFile(layerHandle int, path string) (ret int) {
 	if ent.Size != size {
 		reader, err := l.reader.OpenFile(path)
 		if err != nil {
-			return -int(syscall.ENOENT)
+			return errorValue(syscall.ENOENT)
 		}
 		dest, err := os.OpenFile(destpath, os.O_RDWR|os.O_TRUNC, 0700)
 		if err != nil {
-			return -int(syscall.ENOENT)
+			return errorValue(syscall.ENOENT)
 		}
-		if _, err := io.Copy(dest, reader); err != nil {
+		buf := make([]byte, ent.Size)
+		if _, err := io.CopyBuffer(dest, reader, buf); err != nil {
 			return -int(syscall.ENOENT)
 		}
 	}

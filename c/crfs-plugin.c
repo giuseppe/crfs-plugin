@@ -354,7 +354,7 @@ plugin_version ()
 const char *
 plugin_name ()
 {
-  return "test";
+  return "crfs";
 }
 
 struct data_source *plugin_load (struct ovl_layer *layer, const char *opaque, const char *path)

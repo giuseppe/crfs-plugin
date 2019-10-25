@@ -95,3 +95,11 @@ Alternatively, it is possible to use a local file:
 ```
 # fuse-overlayfs -o fast_ino=1,plugins=/path/to/crfs-plugin.so,lowerdir=//crfs/$(echo -n /path/to/stargzified-layer.tar.gz | base64 -w0)/$(pwd)/lower,upperdir=upper,workdir=work merged
 ```
+
+# Installation
+
+`make install` will install crfs-plugin.so under `$PREFIX/libexec/fuse-overlayfs/`.
+
+fuse-overlayfs will automatically load the plugins from that location,
+without requiring the additional `-oplugins=...` configuration at run
+time.

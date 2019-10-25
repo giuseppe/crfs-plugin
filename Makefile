@@ -1,8 +1,9 @@
 PREFIX ?= /usr/local
+FUSE_OVERLAYFS ?= fuse-overlayfs
 
-crfs-plugin.so: fuse-overlayfs/config.h go/go.a c/crfs-plugin.c
-	$(CC) -shared -I fuse-overlayfs \
-	fuse-overlayfs/utils.c \
+crfs-plugin.so: $(FUSE_OVERLAYFS)/config.h go/go.a c/crfs-plugin.c
+	$(CC) -shared -I $(FUSE_OVERLAYFS) \
+	$(FUSE_OVERLAYFS)/utils.c \
 	-I ./go -fPIC \
 	c/crfs-plugin.c \
 	go/go.a -l pthread \
@@ -12,11 +13,11 @@ install: crfs-plugin.so
 	/usr/bin/install -dD $(PREFIX)/libexec/fuse-overlayfs/
 	/usr/bin/install -c crfs-plugin.so -D $(PREFIX)/libexec/fuse-overlayfs/
 
-fuse-overlayfs:
+$(FUSE_OVERLAYFS):
 	git clone --depth=1 -b c-plugins https://github.com/giuseppe/fuse-overlayfs
 
-fuse-overlayfs/config.h: fuse-overlayfs
-	(cd fuse-overlayfs; ./autogen.sh; ./configure)
+$(FUSE_OVERLAYFS)/config.h: $(FUSE_OVERLAYFS)
+	(cd $(FUSE_OVERLAYFS); ./autogen.sh; ./configure)
 	touch $@
 
 go/go.a: go/crfs-plugin.go

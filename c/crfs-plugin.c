@@ -181,6 +181,8 @@ crfs_statat (struct ovl_layer *l, const char *path, struct stat *st, int flags, 
   st->st_mtim.tv_sec = ret.r10 / 1000000000;
   st->st_mtim.tv_nsec = ret.r10 % 1000000000;
 
+  st->st_ctim = st->st_atim = st->st_mtim;
+
   return 0;
 }
 

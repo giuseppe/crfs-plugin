@@ -14,7 +14,7 @@ install: crfs-plugin.so
 	/usr/bin/install -c crfs-plugin.so -D $(PREFIX)/libexec/fuse-overlayfs/
 
 $(FUSE_OVERLAYFS):
-	git clone --depth=1 -b c-plugins https://github.com/giuseppe/fuse-overlayfs
+	git clone https://github.com/containers/fuse-overlayfs
 
 $(FUSE_OVERLAYFS)/config.h: $(FUSE_OVERLAYFS)
 	(cd $(FUSE_OVERLAYFS); ./autogen.sh; ./configure)
